@@ -47,7 +47,7 @@ object AkkaPi extends App {
 
       val tickSource = b.add(Source(Duration.Zero, 1.second, Tick))
       val zip = b.add(Zip[SimulationState, Tick.type]().withAttributes(OperationAttributes.inputBuffer(1, 1)))
-      val selectFirst = b.add(Flow[(SimulationState, Tick.type)].map(_._1))
+      val selectFirst = b.add(Flow[(SimulationState, Tick.type)].map(_._1).drop(1))
 
       tickSource.outlet ~> zip.in1
       zip.out ~> selectFirst.inlet

@@ -1,42 +1,53 @@
 package swave.rsc
 
-import java.util.concurrent.Executors
+import scala.io.StdIn
+import java.util.concurrent.{ TimeUnit, Executors }
+import java.util.{ List ⇒ JList }
 import reactor.Environment
 import reactor.core.processor.RingBufferProcessor
 import reactor.core.support.NamedDaemonThreadFactory
 import reactor.rx._
-import scala.io.StdIn
-import scala.collection.JavaConverters._
+import Model._
+import Utils._
 
 object ReactorPi extends App {
   import ReactorCompat._
 
   Environment.initialize()
 
-  val dispatcher1 = Environment.sharedDispatcher()
-
   val pool = Executors.newCachedThreadPool(new NamedDaemonThreadFactory("tee", null, null, true))
 
-  val ints: Stream[Int] =
-    Streams.from(Iterable.tabulate(10000)(identity).asJava)
-      .dispatchOn(dispatcher1).subscribeOn(dispatcher1)
-      .log("A")
-      .process(RingBufferProcessor.create[Int](pool, 8))
+  val points: Stream[Point] =
+    Streams.wrap(SynchronousIterablePublisher(iterable(new RandomDoubleValueGenerator()), "DoublePub"))
+      .dispatchOn(Environment.sharedDispatcher())
+      .buffer(2)
+      .map[Point] { (list: JList[Double]) ⇒ Point(list.get(0), list.get(1)) }
+      .log("points")
+      .process(RingBufferProcessor.create[Point](pool, 32))
 
-  val evens: Stream[Int] =
-    ints
-      .filter { (i: Int) ⇒ (i & 1) == 0 }
-      .log("B")
+  val innerSamples: Stream[Sample] =
+    points
+      .log("inner-1")
+      .filter { (p: Point) ⇒ p.isInner }
+      .map[Sample](InnerSample(_: Point))
+      .log("inner-2")
 
-  val odds: Stream[Int] =
-    ints
-      .filter { (i: Int) ⇒ (i & 1) == 1 }
-      .log("C")
+  val outerSamples: Stream[Sample] =
+    points
+      .log("outer-1")
+      .filter { (p: Point) ⇒ !p.isInner }
+      .map[Sample](OuterSample(_: Point))
+      .log("outer-2")
 
-  Streams.merge(evens, odds)
-    .log("D")
-    .take(1000)
+  Streams.merge(innerSamples, outerSamples)
+    .dispatchOn(Environment.cachedDispatcher())
+    .scan(SimulationState(0, 0), { (_: SimulationState).withNextSample(_: Sample) })
+    .log("result")
+    //.sample(1, TimeUnit.SECONDS)
+    .map[String] { (ss: SimulationState) ⇒ f"After ${ss.totalSamples}%8d samples π is approximated as ${ss.π}%.5f" }
+    .take(10000)
     .consume()
+    //.consume(println(_: String))
     .start()
 
   StdIn.readLine()
