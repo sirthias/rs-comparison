@@ -19,21 +19,21 @@ object ReactorPi extends App {
 
   val points: Stream[Point] =
     Streams.wrap(SynchronousIterablePublisher(iterable(new RandomDoubleValueGenerator()), "DoublePub"))
-      .dispatchOn(Environment.sharedDispatcher())
+      .dispatchOn(Environment.cachedDispatcher())
       .buffer(2)
       .map[Point] { (list: JList[Double]) ⇒ Point(list.get(0), list.get(1)) }
       .log("points")
-      .process(RingBufferProcessor.create[Point](pool, 32))
+  //.process(RingBufferProcessor.create[Point](pool, 32))
 
   val innerSamples: Stream[Sample] =
-    points
+    points.dispatchOn(Environment.cachedDispatcher())
       .log("inner-1")
       .filter { (p: Point) ⇒ p.isInner }
       .map[Sample](InnerSample(_: Point))
       .log("inner-2")
 
   val outerSamples: Stream[Sample] =
-    points
+    points.dispatchOn(Environment.cachedDispatcher())
       .log("outer-1")
       .filter { (p: Point) ⇒ !p.isInner }
       .map[Sample](OuterSample(_: Point))
@@ -47,8 +47,7 @@ object ReactorPi extends App {
     .map[String] { (ss: SimulationState) ⇒ f"After ${ss.totalSamples}%8d samples π is approximated as ${ss.π}%.5f" }
     .take(10000)
     .consume()
-    //.consume(println(_: String))
-    .start()
+  //.consume(println(_: String))
 
   StdIn.readLine()
   Environment.terminate()
