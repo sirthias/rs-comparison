@@ -34,6 +34,7 @@ lazy val rsc = (project in file("."))
     libraryDependencies ++= Seq(
       "com.typesafe.akka" %% "akka-actor" % "2.3.11",
       "com.typesafe.akka" %% "akka-stream-experimental" % "1.0-RC3",
+      "io.reactivex"	%% "rxscala"	% "0.24.1",
       "io.projectreactor"	% "reactor-core"	% "2.0.3.RELEASE",
       "io.projectreactor"	% "reactor-stream"	% "2.0.3.RELEASE",
       "ch.qos.logback" % "logback-classic" % "1.1.2"))
