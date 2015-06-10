@@ -1,11 +1,11 @@
 package swave.rsc
 
-import scala.io.StdIn
-import java.util.concurrent.{ TimeUnit, Executors }
 import java.util.{ List ⇒ JList }
+import java.util.concurrent.{ CountDownLatch, TimeUnit, Executors }
 import reactor.Environment
 import reactor.core.processor.RingBufferProcessor
 import reactor.core.support.NamedDaemonThreadFactory
+import reactor.rx.action.Control
 import reactor.rx._
 import Model._
 import Utils._
@@ -16,41 +16,40 @@ object ReactorPi extends App {
   Environment.initialize()
 
   val pool = Executors.newCachedThreadPool(new NamedDaemonThreadFactory("tee", null, null, true))
+  val done = new CountDownLatch(10)
 
   val points: Stream[Point] =
+    // Streams.from(iterable(new RandomDoubleValueGenerator()))
     Streams.wrap(SynchronousIterablePublisher(iterable(new RandomDoubleValueGenerator()), "DoublePub"))
       .dispatchOn(Environment.cachedDispatcher())
       .buffer(2)
       .map[Point] { (list: JList[Double]) ⇒ Point(list.get(0), list.get(1)) }
-      .log("points")
   //.process(RingBufferProcessor.create[Point](pool, 32))
 
   val innerSamples: Stream[Sample] =
     points.dispatchOn(Environment.cachedDispatcher())
-      .log("inner-1")
       .filter { (p: Point) ⇒ p.isInner }
       .map[Sample](InnerSample(_: Point))
-      .log("inner-2")
 
   val outerSamples: Stream[Sample] =
     points.dispatchOn(Environment.cachedDispatcher())
-      .log("outer-1")
       .filter { (p: Point) ⇒ !p.isInner }
       .map[Sample](OuterSample(_: Point))
-      .log("outer-2")
 
-  Streams.merge(innerSamples, outerSamples)
-    .dispatchOn(Environment.cachedDispatcher())
-    .scan(SimulationState(0, 0), { (_: SimulationState).withNextSample(_: Sample) })
-    .log("result")
-    //.sample(1, TimeUnit.SECONDS)
-    .map[String] { (ss: SimulationState) ⇒ f"After ${ss.totalSamples}%8d samples π is approximated as ${ss.π}%.5f" }
-    .take(10000)
-    .consume()
-  //.consume(println(_: String))
+  var control: Control =
+    Streams.merge(innerSamples, outerSamples)
+      .dispatchOn(Environment.cachedDispatcher())
+      .scan(State(0, 0), { (_: State).withNextSample(_: Sample) })
+      .sample(1, TimeUnit.SECONDS)
+      //.take(10)
+      .map[Unit] { (ss: State) ⇒
+        println(f"After ${ss.totalSamples}%,10d samples π is approximated as ${ss.π}%.5f")
+        done.countDown()
+        if (done.getCount == 0) control.cancel()
+      }
+      .consumeLater()
 
-  StdIn.readLine()
-  Environment.terminate()
+  control.start()
 }
 
 object ReactorCompat {

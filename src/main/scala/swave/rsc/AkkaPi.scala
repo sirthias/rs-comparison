@@ -1,28 +1,30 @@
 package swave.rsc
 
-import scala.util.{ Try, Failure, Success }
+import com.typesafe.config.{ ConfigFactory, Config }
 import scala.concurrent.duration._
-import akka.stream.stage.{ Context, PushStage }
 import akka.actor.ActorSystem
 import akka.stream.{ OperationAttributes, ActorFlowMaterializer }
 import akka.stream.scaladsl._
 import Model._
 
 object AkkaPi extends App {
-  implicit val system = ActorSystem("AkkaPi")
+  val config: Config = ConfigFactory.parseString("""
+    akka.actor.default-dispatcher.throughput = 256
+    akka.stream.materializer.max-input-buffer-size = 256""")
+  implicit val system = ActorSystem("AkkaPi", config)
   implicit val materializer = ActorFlowMaterializer()
 
   Source(() ⇒ new RandomDoubleValueGenerator())
     .grouped(2)
     .map { case x +: y +: Nil ⇒ Point(x, y) }
     .via(broadcastFilterMerge)
-    .scan(SimulationState(0, 0)) { _ withNextSample _ }
+    .scan(State(0, 0)) { _ withNextSample _ }
     .conflate(identity)(Keep.right)
     .via(onePerSecValve)
-    .map(state ⇒ f"After ${state.totalSamples}%8d samples π is approximated as ${state.π}%.5f")
+    .map(state ⇒ f"After ${state.totalSamples}%,10d samples π is approximated as ${state.π}%.5f")
     .take(10)
-    .via(onTermination(_ ⇒ system.shutdown()))
-    .runForeach(println)
+    .map(println)
+    .runWith(Sink.onComplete(_ ⇒ system.shutdown()))
 
   ///////////////////////////////////////////
 
@@ -41,33 +43,18 @@ object AkkaPi extends App {
       (broadcast.in, merge.out)
     }
 
-  def onePerSecValve: Flow[SimulationState, SimulationState, Unit] =
+  def onePerSecValve: Flow[State, State, Unit] =
     Flow() { implicit b ⇒
       import FlowGraph.Implicits._
 
-      val tickSource = b.add(Source(Duration.Zero, 1.second, Tick))
-      val zip = b.add(Zip[SimulationState, Tick.type]().withAttributes(OperationAttributes.inputBuffer(1, 1)))
-      val selectFirst = b.add(Flow[(SimulationState, Tick.type)].map(_._1).drop(1))
+      val zip = b.add(ZipWith[State, Tick.type, State](Keep.left)
+        .withAttributes(OperationAttributes.inputBuffer(1, 1)))
+      val dropOne = b.add(Flow[State].drop(1))
 
-      tickSource.outlet ~> zip.in1
-      zip.out ~> selectFirst.inlet
+      Source(Duration.Zero, 1.second, Tick) ~> zip.in1
+      zip.out ~> dropOne.inlet
 
-      (zip.in0, selectFirst.outlet)
-    }
-
-  def onTermination[T, Mat](f: Try[Unit] ⇒ Unit): Flow[T, T, Unit] =
-    Flow[T] transform { () ⇒
-      new PushStage[T, T] {
-        def onPush(element: T, ctx: Context[T]) = ctx.push(element)
-        override def onUpstreamFinish(ctx: Context[T]) = {
-          f(Success(()))
-          super.onUpstreamFinish(ctx)
-        }
-        override def onUpstreamFailure(cause: Throwable, ctx: Context[T]) = {
-          f(Failure(cause))
-          ctx.fail(cause)
-        }
-      }
+      (zip.in0, dropOne.outlet)
     }
 }
 

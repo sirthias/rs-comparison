@@ -1,6 +1,6 @@
 package swave.rsc
 
-import scala.io.StdIn
+import java.util.concurrent.CountDownLatch
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import rx.lang.scala.subjects.PublishSubject
@@ -14,6 +14,7 @@ object RxScalaPi extends App {
 
   val points = PublishSubject[Point]()
   val pointsFanout = points.onBackpressureDrop
+  val done = new CountDownLatch(1)
 
   val sub =
     Observable.from(iterable(new RandomDoubleValueGenerator()))
@@ -24,23 +25,24 @@ object RxScalaPi extends App {
 
   val innerSamples =
     pointsFanout.observeOn(scheduler)
-      .filter { (p: Point) ⇒ p.isInner }
+      .filter { _.isInner }
       .map(InnerSample)
 
   val outerSamples =
     pointsFanout.observeOn(scheduler)
-      .filter { (p: Point) ⇒ !p.isInner }
+      .filter { !_.isInner }
       .map(OuterSample)
 
   innerSamples
     .merge(outerSamples).observeOn(scheduler)
-    .scan(SimulationState(0, 0)) { _ withNextSample _ }
+    .scan(State(0, 0)) { _ withNextSample _ }
     .throttleLast(1.second)
-    .map(state ⇒ f"After ${state.totalSamples}%8d samples π is approximated as ${state.π}%.5f")
+    .map(state ⇒ f"After ${state.totalSamples}%,10d samples π is approximated as ${state.π}%.5f")
     .take(10)
-    .finallyDo { sub.unsubscribe() }
+    .finallyDo { done.countDown() }
     .foreach(println(_))
 
-  StdIn.readLine()
+  done.await()
+  sub.unsubscribe()
 }
 
